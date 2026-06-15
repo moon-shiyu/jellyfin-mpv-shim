@@ -75,7 +75,8 @@ def is_local_subnet(host, local_ips, prefix_length=24):
 log = logging.getLogger("clients")
 path_regex = re.compile(r"^(https?://)?(?:(\[[^/]+\])|([^/:]+))(:[0-9]+)?(/.*)?$")
 
-from typing import Optional
+from dataclasses import dataclass
+from typing import Dict, List, Optional
 
 
 def expo(max_value: Optional[int] = None):
@@ -87,6 +88,38 @@ def expo(max_value: Optional[int] = None):
             n += 1
         else:
             yield max_value
+
+
+# Possible server status values
+SERVER_STATUS_CONNECTED = "connected"
+SERVER_STATUS_CONNECTING = "connecting"
+SERVER_STATUS_RECONNECTING = "reconnecting"
+SERVER_STATUS_DISCONNECTED = "disconnected"
+SERVER_STATUS_FAILED = "failed"
+
+
+@dataclass
+class ServerStatus:
+    """Tracks reconnection state for a single server, for CLI/GUI display."""
+
+    uuid: str
+    address: str
+    status: str = SERVER_STATUS_DISCONNECTED
+    last_error: str = ""
+    retry_wait_seconds: int = 0
+    attempt_count: int = 0
+    last_check_time: float = 0.0
+
+    def to_dict(self) -> dict:
+        return {
+            "uuid": self.uuid,
+            "address": self.address,
+            "status": self.status,
+            "last_error": self.last_error,
+            "retry_wait_seconds": self.retry_wait_seconds,
+            "attempt_count": self.attempt_count,
+            "last_check_time": self.last_check_time,
+        }
 
 
 class PeriodicHealthCheck(threading.Thread):
@@ -116,10 +149,45 @@ class ClientManager(object):
         self.usernames = {}
         self.is_stopping = False
 
+        # Per-server reconnection status tracking (keyed by server uuid).
+        self.server_statuses: Dict[str, ServerStatus] = {}
+
         self.health_check = None
         if settings.health_check_interval is not None:
             self.health_check = PeriodicHealthCheck(self.check_all_clients)
             self.health_check.start()
+
+    def _update_server_status(
+        self,
+        server: dict,
+        status: str,
+        last_error: str = "",
+        retry_wait_seconds: int = 0,
+        increment_attempt: bool = False,
+    ):
+        """Update the tracked reconnection status for a server."""
+        uuid = server.get("uuid")
+        if uuid is None:
+            return
+        ss = self.server_statuses.get(uuid)
+        if ss is None:
+            ss = ServerStatus(uuid=uuid, address=server.get("address", ""))
+            self.server_statuses[uuid] = ss
+        ss.address = server.get("address", ss.address)
+        ss.status = status
+        if last_error:
+            ss.last_error = last_error
+        if retry_wait_seconds:
+            ss.retry_wait_seconds = retry_wait_seconds
+        elif status == SERVER_STATUS_CONNECTED:
+            ss.retry_wait_seconds = 0
+        if increment_attempt:
+            ss.attempt_count += 1
+        ss.last_check_time = time.time()
+
+    def get_server_statuses(self) -> List[dict]:
+        """Return a snapshot of per-server status dicts for CLI/GUI display."""
+        return [ss.to_dict() for ss in self.server_statuses.values()]
 
     @staticmethod
     def _get_cli_credential_args():
@@ -291,7 +359,19 @@ class ClientManager(object):
                 )
             )
             for attempt in range(settings.connect_retry_mins * 2):
-                time.sleep(30)
+                wait_seconds = 30
+                # Update status for all servers that are still disconnected.
+                for server in self.credentials:
+                    if server["uuid"] not in self.clients:
+                        self._update_server_status(
+                            server,
+                            SERVER_STATUS_RECONNECTING,
+                            last_error=f"Initial connect failed, retrying "
+                            f"(attempt {attempt + 1}/{settings.connect_retry_mins * 2})",
+                            retry_wait_seconds=wait_seconds,
+                            increment_attempt=True,
+                        )
+                time.sleep(wait_seconds)
                 is_logged_in = self._connect_all()
                 if is_logged_in:
                     break
@@ -392,12 +472,20 @@ class ClientManager(object):
                                 timeout
                             )
                         )
+                        self._update_server_status(
+                            server,
+                            SERVER_STATUS_RECONNECTING,
+                            last_error="WebSocket disconnected",
+                            retry_wait_seconds=timeout,
+                            increment_attempt=True,
+                        )
                         self._disconnect_client(server=server)
                         time.sleep(timeout)
                         if self.connect_client(server, False):
                             break
             elif event_name == "WebSocketConnect":
                 log.info("WebSocket connected, posting capabilities")
+                self._update_server_status(server, SERVER_STATUS_CONNECTED)
                 try:
                     client.jellyfin.post_capabilities(CAPABILITIES)
                 except Exception:
@@ -414,15 +502,24 @@ class ClientManager(object):
 
         # Check connection
         if self.validate_client(client, True):
+            self._update_server_status(server, SERVER_STATUS_CONNECTED)
             return True
 
         # Wait and check connection again before destroying/re-creating client
         log.info("Not connected yet, waiting 3 seconds...")
+        self._update_server_status(
+            server, SERVER_STATUS_CONNECTING, last_error="Awaiting initial connection"
+        )
         time.sleep(3)
         is_connected = self.validate_client(client)
 
         if is_connected:
             log.info("Actually connected now.")
+            self._update_server_status(server, SERVER_STATUS_CONNECTED)
+        else:
+            self._update_server_status(
+                server, SERVER_STATUS_FAILED, last_error="Failed initial validation"
+            )
         return is_connected
 
     def remove_client(self, uuid: str):
@@ -436,9 +533,21 @@ class ClientManager(object):
         if self.is_stopping:
             return False
 
+        self._update_server_status(
+            server, SERVER_STATUS_CONNECTING, increment_attempt=True
+        )
+
         is_logged_in = False
         client = self.client_factory()
-        state = client.authenticate({"Servers": [server]}, discover=False)
+        try:
+            state = client.authenticate({"Servers": [server]}, discover=False)
+        except Exception as e:
+            error_summary = f"{type(e).__name__}: {e}"
+            self._update_server_status(
+                server, SERVER_STATUS_FAILED, last_error=error_summary
+            )
+            log.warning("Authentication failed for %s: %s", server.get("address"), error_summary)
+            return False
         server["connected"] = state["State"] == CONNECTION_STATE["SignedIn"]
         if server["connected"]:
             is_logged_in = self.setup_client(client, server)
@@ -446,6 +555,7 @@ class ClientManager(object):
                 self.clients[server["uuid"]] = client
                 if server.get("username"):
                     self.usernames[server["uuid"]] = server["username"]
+                self._update_server_status(server, SERVER_STATUS_CONNECTED)
             elif do_retries:
                 # Jellyfin client sometimes "connects" halfway but doesn't actually work.
                 # Retry three times to reduce odds of this happening.
@@ -454,11 +564,29 @@ class ClientManager(object):
                     log.warning(
                         f"Partially connected. Retrying {i+1}/{partial_reconnect_attempts}."
                     )
+                    self._update_server_status(
+                        server,
+                        SERVER_STATUS_RECONNECTING,
+                        last_error=f"Partial connection, retry {i+1}/{partial_reconnect_attempts}",
+                        increment_attempt=True,
+                    )
                     self._disconnect_client(server=server)
                     time.sleep(1)
                     if self.connect_client(server, False):
                         is_logged_in = True
                         break
+                if not is_logged_in:
+                    self._update_server_status(
+                        server,
+                        SERVER_STATUS_FAILED,
+                        last_error="Partial connection, all retries exhausted",
+                    )
+        else:
+            self._update_server_status(
+                server,
+                SERVER_STATUS_FAILED,
+                last_error=f"Auth state: {state.get('State', 'unknown')}",
+            )
 
         return is_logged_in
 
@@ -486,12 +614,26 @@ class ClientManager(object):
             del self.clients[key]
             client.stop()
 
+    def _server_for_client(self, client: "JellyfinClient") -> Optional[dict]:
+        """Find the server credential dict associated with a client instance."""
+        for uid, c in self.clients.items():
+            if c is client:
+                for server in self.credentials:
+                    if server["uuid"] == uid:
+                        return server
+        return None
+
     def check_all_clients(self):
         log.info("Performing client health check...")
         # list() because validate_client may mutate self.clients via the
         # synthesized WebSocketDisconnect path.
         for client in list(self.clients.values()):
-            self.validate_client(client)
+            # Find the server dict for this client to pass status context.
+            server = self._server_for_client(client)
+            valid = self.validate_client(client)
+            if valid and server is not None:
+                self._update_server_status(server, SERVER_STATUS_CONNECTED)
+
         # Retry credentials that aren't currently connected. Without this, a
         # server that fails the initial connect (e.g. shim started before LAN
         # was up) is never tried again until the user restarts the app —
@@ -502,7 +644,17 @@ class ClientManager(object):
                     "Health check: retrying disconnected server %s",
                     server.get("address"),
                 )
-                self.connect_client(server, do_retries=False)
+                self._update_server_status(
+                    server,
+                    SERVER_STATUS_RECONNECTING,
+                    last_error="Health check retry",
+                    increment_attempt=True,
+                )
+                if self.connect_client(server, do_retries=False):
+                    self._update_server_status(server, SERVER_STATUS_CONNECTED)
+                else:
+                    # connect_client already sets FAILED status with details
+                    pass
 
     def stop(self):
         if self.health_check:
