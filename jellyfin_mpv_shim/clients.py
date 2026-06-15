@@ -1,0 +1,531 @@
+from jellyfin_apiclient_python import JellyfinClient
+from jellyfin_apiclient_python.connection_manager import CONNECTION_STATE
+from .conf import settings
+from . import conffile
+from getpass import getpass
+from .constants import CAPABILITIES, CLIENT_VERSION, USER_APP_NAME, USER_AGENT, APP_NAME
+from .i18n import _
+
+import os.path
+import json
+import uuid
+import time
+import logging
+import re
+import threading
+
+import socket
+import ipaddress
+from urllib.parse import urlparse
+
+
+# Get all local IPv4 addresses for host machine
+def get_local_ips():
+    local_ips = []
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.connect(("8.8.8.8", 80))
+            local_ips.append(ipaddress.ip_address(s.getsockname()[0]))
+    except OSError:
+        pass
+
+    try:
+        for info in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
+            ip = ipaddress.ip_address(info[4][0])
+            if ip not in local_ips and ip.is_private:
+                local_ips.append(ip)
+    except socket.gaierror:
+        pass
+
+    return local_ips
+
+
+# Extract hostname/IP from a URL.
+def extract_host(url):
+    parsed = urlparse(url)
+    return parsed.hostname  # Handles port stripping automatically
+
+
+# Check if string is valid IPv4 address
+def is_ipv4(host):
+    try:
+        ipaddress.IPv4Address(host)
+        return True
+    except ipaddress.AddressValueError:
+        return False
+
+
+# Check if host IP is on the same subnet as any local IP
+def is_local_subnet(host, local_ips, prefix_length=24):
+    try:
+        target_ip = ipaddress.IPv4Address(host)
+    except ipaddress.AddressValueError:
+        return False
+
+    if not target_ip.is_private:
+        return False
+
+    for local_ip in local_ips:
+        net = ipaddress.ip_network(f"{local_ip}/{prefix_length}", strict=False)
+        if target_ip in net:
+            return True
+    return False
+
+
+log = logging.getLogger("clients")
+path_regex = re.compile(r"^(https?://)?(?:(\[[^/]+\])|([^/:]+))(:[0-9]+)?(/.*)?$")
+
+from typing import Optional
+
+
+def expo(max_value: Optional[int] = None):
+    n = 0
+    while True:
+        a = 2**n
+        if max_value is None or a < max_value:
+            yield a
+            n += 1
+        else:
+            yield max_value
+
+
+class PeriodicHealthCheck(threading.Thread):
+    def __init__(self, callback):
+        self.halt = False
+        self.trigger = threading.Event()
+        self.callback = callback
+
+        threading.Thread.__init__(self, daemon=True)
+
+    def stop(self):
+        self.halt = True
+        self.trigger.set()
+        self.join()
+
+    def run(self):
+        while not self.halt:
+            if not self.trigger.wait(settings.health_check_interval):
+                self.callback()
+
+
+class ClientManager(object):
+    def __init__(self):
+        self.callback = lambda client, event_name, data: None
+        self.credentials = []
+        self.clients = {}
+        self.usernames = {}
+        self.is_stopping = False
+
+        self.health_check = None
+        if settings.health_check_interval is not None:
+            self.health_check = PeriodicHealthCheck(self.check_all_clients)
+            self.health_check.start()
+
+    @staticmethod
+    def _get_cli_credential_args():
+        from .args import get_args
+        a = get_args()
+        if a.server and a.username:
+            return a.server, a.username, a.password
+        return None
+
+    def _find_existing_credential(self, server: str, username: str):
+        """Find an existing credential matching the given server and username."""
+        if server.endswith("/"):
+            server = server[:-1]
+        for cred in self.credentials:
+            cred_address = cred.get("address", "").rstrip("/")
+            cred_username = cred.get("username", "")
+            if cred_address == server and cred_username == username:
+                return cred
+        return None
+
+    def _update_account(self, server: str, username: str, password: str):
+        """Update an existing account by re-authenticating with new credentials."""
+        existing = self._find_existing_credential(server, username)
+        if existing is None:
+            return False
+
+        # Disconnect the old client
+        self._disconnect_client(uuid=existing["uuid"])
+        # Remove the old credential
+        self.credentials = [
+            c for c in self.credentials if c["uuid"] != existing["uuid"]
+        ]
+        self.save_credentials()
+
+        # Re-login with updated credentials
+        return self.login(server, username, password)
+
+    def cli_connect(self):
+        from .args import get_args
+        cli_commands = set(get_args().command or [])
+
+        is_logged_in = self.try_connect()
+        add_another = "add" in cli_commands
+        clear_accounts = "clear" in cli_commands
+
+        cli_creds = self._get_cli_credential_args()
+
+        if clear_accounts:
+            log.info(_("Clearing all existing accounts."))
+            self.remove_all_clients()
+            is_logged_in = False
+
+        if cli_creds:
+            server, username, password = cli_creds
+            if not clear_accounts:
+                existing = self._find_existing_credential(server, username)
+                if existing is not None:
+                    log.info(_("Account already exists. Updating credentials."))
+                    if self._update_account(server, username, password):
+                        log.info(_("Successfully updated server credentials."))
+                        is_logged_in = True
+                    else:
+                        log.warning(_("Updating server credentials failed."))
+                    cli_creds = None
+
+            if cli_creds and (not is_logged_in or add_another or clear_accounts):
+                is_logged_in = self.login(server, username, password)
+                if is_logged_in:
+                    log.info(_("Successfully added server."))
+                else:
+                    log.warning(_("Adding server failed."))
+
+        while not is_logged_in or add_another:
+            server = input(_("Server URL: "))
+            username = input(_("Username: "))
+            try:
+                password = getpass(_("Password: "))
+            except (EOFError, OSError):
+                password = ""
+
+            is_logged_in = self.login(server, username, password)
+
+            if is_logged_in:
+                log.info(_("Successfully added server."))
+                add_another = input(_("Add another server?") + " [y/N] ")
+                add_another = add_another in ("y", "Y", "yes", "Yes")
+            else:
+                log.warning(_("Adding server failed."))
+
+    @staticmethod
+    def client_factory():
+        client = JellyfinClient(allow_multiple_clients=True)
+        client.config.data["app.default"] = True
+        client.config.app(
+            USER_APP_NAME, CLIENT_VERSION, settings.player_name, settings.client_uuid
+        )
+        client.config.data["http.user_agent"] = USER_AGENT
+        client.config.data["auth.ssl"] = not settings.ignore_ssl_cert
+
+        if settings.tls_client_cert:
+            client.config.data["auth.tls_client_cert"] = settings.tls_client_cert
+            client.config.data["auth.tls_client_key"] = settings.tls_client_key
+            client.config.data["auth.tls_server_ca"] = settings.tls_server_ca
+            client.auth.create_session_with_client_auth()
+
+        return client
+
+    def _connect_all(self):
+        is_logged_in = False
+
+        local_ips = get_local_ips()
+
+        def connection_priority(server):
+            host = extract_host(server["address"])
+
+            # Highest priority: same subnet as us
+            if is_ipv4(host) and is_local_subnet(host, local_ips):
+                return 0
+
+            # Second priority: other private IPs (maybe reachable via VPN, etc.)
+            if is_ipv4(host):
+                try:
+                    if ipaddress.IPv4Address(host).is_private:
+                        return 1
+                except ipaddress.AddressValueError:
+                    pass
+
+            # Lowest priority: hostnames / external addresses
+            return 2
+
+        # Sort creds list by local-first priority
+        sorted_credentials = sorted(self.credentials, key=connection_priority)
+
+        # Array to stash server Ids, to avoid double-connecting to servers
+        # and avoid clobbering the preferred connection
+        connected_servers = []
+
+        for server in sorted_credentials:
+            # Test if we've connected to this server already
+            if server["Id"] in connected_servers:
+                # If so, skip connecting
+                continue
+            if self.connect_client(server):
+                is_logged_in = True
+
+                # If valid connection, add Id of server to array
+                connected_servers.append(server["Id"])
+        return is_logged_in
+
+    def try_connect(self):
+        credentials_location = conffile.get(APP_NAME, "cred.json")
+        if os.path.exists(credentials_location):
+            with open(credentials_location) as cf:
+                self.credentials = json.load(cf)
+
+        if "Servers" in self.credentials:
+            credentials_old = self.credentials
+            self.credentials = []
+            for server in credentials_old["Servers"]:
+                server["uuid"] = str(uuid.uuid4())
+                server["username"] = ""
+                self.credentials.append(server)
+
+        is_logged_in = self._connect_all()
+        if settings.connect_retry_mins and not is_logged_in:
+            log.warning(
+                "Connection failed. Will retry for {0} minutes.".format(
+                    settings.connect_retry_mins
+                )
+            )
+            for attempt in range(settings.connect_retry_mins * 2):
+                time.sleep(30)
+                is_logged_in = self._connect_all()
+                if is_logged_in:
+                    break
+
+        return is_logged_in
+
+    def save_credentials(self):
+        credentials_location = conffile.get(APP_NAME, "cred.json")
+        with open(credentials_location, "w") as cf:
+            json.dump(self.credentials, cf)
+
+    def login(
+        self, server: str, username: str, password: str, force_unique: bool = False
+    ):
+        if server.endswith("/"):
+            server = server[:-1]
+
+        protocol, ipv6_host, ipv4_host, port, path = path_regex.match(server).groups()
+
+        if not protocol:
+            log.warning("Adding http:// because it was not provided.")
+            protocol = "http://"
+
+        if protocol == "http://" and not port:
+            log.warning("Adding port 8096 for insecure local http connection.")
+            log.warning(
+                "If you want to connect to standard http port 80, use :80 in the url."
+            )
+            port = ":8096"
+
+        server = "".join(filter(bool, (protocol, ipv6_host, ipv4_host, port, path)))
+
+        client = self.client_factory()
+        client.auth.connect_to_address(server)
+        result = client.auth.login(server, username, password)
+        if "AccessToken" in result:
+            credentials = client.auth.credentials.get_credentials()
+            server = credentials["Servers"][0]
+            if force_unique:
+                server["uuid"] = server["Id"]
+            else:
+                server["uuid"] = str(uuid.uuid4())
+            server["username"] = username
+            if force_unique and server["Id"] in self.clients:
+                return True
+            self.connect_client(server)
+            self.credentials.append(server)
+            self.save_credentials()
+            return True
+        return False
+
+    def validate_client(self, client: "JellyfinClient", dry_run=False):
+        # Use the apiclient's lower-level _http to bound retries and timeout
+        # for this specific call. The default 30s × 5 retries can wedge the
+        # health-check thread for ~2.5 minutes if the server is unresponsive.
+        # On exception, fall through to the "not in client list" branch below
+        # to force a reconnect (a timeout is a broken connection).
+        try:
+            client_list = client.jellyfin._http(
+                "GET", "Sessions", {"params": None, "timeout": 10, "retry": 1}
+            )
+        except Exception:
+            log.warning("Health check session query failed; treating as disconnected.", exc_info=True)
+            client_list = []
+
+        if client_list is None:
+            log.warning(
+                "Client check failed, proceeding anyways. (Client list is unset.)"
+            )
+            return True
+
+        for f_client in client_list:
+            if f_client.get("DeviceId") == settings.client_uuid:
+                break
+        else:
+            if not dry_run:
+                log.warning(
+                    "Client is not actually connected. (It does not show in the client list.)"
+                )
+                # WebSocketDisconnect doesn't always happen here.
+                client.callback = lambda *_: None
+                client.callback_ws = lambda *_: None
+                client.stop()
+                client.callback("WebSocketDisconnect", None)
+            return False
+
+        return True
+
+    def setup_client(self, client: "JellyfinClient", server):
+        def event(event_name, data):
+            if event_name == "WebSocketDisconnect":
+                timeout_gen = expo(100)
+                if server["uuid"] in self.clients:
+                    while not self.is_stopping:
+                        timeout = next(timeout_gen)
+                        log.info(
+                            "No connection to server. Next try in {0} second(s)".format(
+                                timeout
+                            )
+                        )
+                        self._disconnect_client(server=server)
+                        time.sleep(timeout)
+                        if self.connect_client(server, False):
+                            break
+            elif event_name == "WebSocketConnect":
+                log.info("WebSocket connected, posting capabilities")
+                try:
+                    client.jellyfin.post_capabilities(CAPABILITIES)
+                except Exception:
+                    log.warning(
+                        "Failed to post capabilities on reconnect", exc_info=True
+                    )
+                self.callback(client, event_name, data)
+            else:
+                self.callback(client, event_name, data)
+
+        client.callback = event
+        client.callback_ws = event
+        client.start(websocket=True)
+
+        # Check connection
+        if self.validate_client(client, True):
+            return True
+
+        # Wait and check connection again before destroying/re-creating client
+        log.info("Not connected yet, waiting 3 seconds...")
+        time.sleep(3)
+        is_connected = self.validate_client(client)
+
+        if is_connected:
+            log.info("Actually connected now.")
+        return is_connected
+
+    def remove_client(self, uuid: str):
+        self.credentials = [
+            server for server in self.credentials if server["uuid"] != uuid
+        ]
+        self.save_credentials()
+        self._disconnect_client(uuid=uuid)
+
+    def connect_client(self, server, do_retries=True):
+        if self.is_stopping:
+            return False
+
+        is_logged_in = False
+        client = self.client_factory()
+        state = client.authenticate({"Servers": [server]}, discover=False)
+        server["connected"] = state["State"] == CONNECTION_STATE["SignedIn"]
+        if server["connected"]:
+            is_logged_in = self.setup_client(client, server)
+            if is_logged_in:
+                self.clients[server["uuid"]] = client
+                if server.get("username"):
+                    self.usernames[server["uuid"]] = server["username"]
+            elif do_retries:
+                # Jellyfin client sometimes "connects" halfway but doesn't actually work.
+                # Retry three times to reduce odds of this happening.
+                partial_reconnect_attempts = 3
+                for i in range(partial_reconnect_attempts):
+                    log.warning(
+                        f"Partially connected. Retrying {i+1}/{partial_reconnect_attempts}."
+                    )
+                    self._disconnect_client(server=server)
+                    time.sleep(1)
+                    if self.connect_client(server, False):
+                        is_logged_in = True
+                        break
+
+        return is_logged_in
+
+    def _disconnect_client(self, uuid: Optional[str] = None, server=None):
+        if uuid is None and server is not None:
+            uuid = server["uuid"]
+
+        if uuid not in self.clients:
+            return
+
+        if server is not None:
+            server["connected"] = False
+
+        client = self.clients[uuid]
+        del self.clients[uuid]
+        client.stop()
+
+    def remove_all_clients(self):
+        self.stop_all_clients()
+        self.credentials = []
+        self.save_credentials()
+
+    def stop_all_clients(self):
+        for key, client in list(self.clients.items()):
+            del self.clients[key]
+            client.stop()
+
+    def check_all_clients(self):
+        log.info("Performing client health check...")
+        # list() because validate_client may mutate self.clients via the
+        # synthesized WebSocketDisconnect path.
+        for client in list(self.clients.values()):
+            self.validate_client(client)
+        # Retry credentials that aren't currently connected. Without this, a
+        # server that fails the initial connect (e.g. shim started before LAN
+        # was up) is never tried again until the user restarts the app —
+        # the long-standing reliability hole behind issues #344 / #410.
+        for server in self.credentials:
+            if server["uuid"] not in self.clients and not self.is_stopping:
+                log.info(
+                    "Health check: retrying disconnected server %s",
+                    server.get("address"),
+                )
+                self.connect_client(server, do_retries=False)
+
+    def stop(self):
+        if self.health_check:
+            self.health_check.stop()
+            self.health_check = None
+
+        self.is_stopping = True
+        for client in self.clients.values():
+            client.stop()
+
+    def get_username_from_client(self, client):
+        # This is kind of convoluted. It may fail if a server
+        # was added before we started saving usernames.
+        for uuid, client2 in self.clients.items():
+            if client2 is client:
+                if uuid in self.usernames:
+                    return self.usernames[uuid]
+                for server in self.credentials:
+                    if server["uuid"] == uuid:
+                        return server.get("username", "Unknown")
+                break
+
+        return "Unknown"
+
+
+clientManager = ClientManager()

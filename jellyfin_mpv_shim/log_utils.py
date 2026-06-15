@@ -1,0 +1,87 @@
+import logging
+import re
+
+bad_patterns = (
+    (re.compile("api_key=[a-f0-9]*"), "api_key=REDACTED"),
+    (
+        re.compile("'X-MediaBrowser-Token': '[a-f0-9]*'"),
+        "'X-MediaBrowser-Token': 'REDACTED'",
+    ),
+    (re.compile("'AccessToken': '[a-f0-9]*'"), "'AccessToken': 'REDACTED'"),
+)
+
+sanitize_logs = False
+root_logger = logging.getLogger("")
+root_logger.level = logging.INFO
+level_mapping = {
+    "CRITICAL": 50,
+    "FATAL": 50,
+    "ERROR": 40,
+    "WARN": 30,
+    "WARNING": 30,
+    "INFO": 20,
+    "DEBUG": 10,
+    "NOTSET": 0,
+}
+
+
+def sanitize(message):
+    if type(message) in (int, float):
+        return message
+    if message is not str and message is not bytes:
+        message = str(message)
+    for pattern, replacement in bad_patterns:
+        message = pattern.sub(replacement, message)
+    return message
+
+
+class CustomFormatter(logging.Formatter):
+    def __init__(self, force_sanitize=False):
+        self.force_sanitize = force_sanitize
+        super(CustomFormatter, self).__init__(
+            fmt="%(asctime)s [%(levelname)8s] %(name)s: %(message)s"
+        )
+
+    def format(self, record):
+        if sanitize_logs or self.force_sanitize:
+            record.msg = sanitize(record.msg)
+            if type(record.args) is dict:
+                sanitized = {}
+                for key, value in record.args.items():
+                    sanitized[key] = sanitize(value)
+                record.args = sanitized
+            elif type(record.args) is tuple:
+                record.args = tuple(sanitize(value) for value in record.args)
+            else:
+                return "(Log message could not be processed for sanitization.)"
+        return logging.Formatter.format(self, record)
+
+
+def enable_sanitization():
+    global sanitize_logs
+    sanitize_logs = True
+
+
+def configure_log(destination, level: str = "info"):
+    lvl = level_mapping[level.upper()]
+    # Records below the logger's level never reach handlers, so widen the root
+    # logger if a handler asks for something more permissive.
+    if lvl < root_logger.level:
+        root_logger.level = lvl
+
+    handler = logging.StreamHandler(destination)
+    handler.setFormatter(CustomFormatter())
+    handler.setLevel(lvl)
+    root_logger.addHandler(handler)
+
+
+def configure_log_file(destination: str, level: str = "info"):
+    lvl = level_mapping[level.upper()]
+    if lvl < root_logger.level:
+        root_logger.level = lvl
+
+    handler = logging.FileHandler(destination, mode="w")
+    # Never allow logging API keys to a file.
+    handler.setFormatter(CustomFormatter(True))
+    handler.setLevel(lvl)
+    root_logger.addHandler(handler)

@@ -1,0 +1,414 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Copyright 2020 Izzie Walton <izzie@iwalton.com> -->
+<component type="desktop-application">
+  <id>com.github.iwalton3.jellyfin-mpv-shim</id>
+  <metadata_license>FSFAP</metadata_license>
+  <project_license>GPL-3.0</project_license>
+  <name>Jellyfin MPV Shim</name>
+  <summary>Cast-only client for Jellyfin Media Server</summary>
+  <developer id="com.github.iwalton3">
+    <name>Izzie Walton</name>
+  </developer>
+
+  <description>
+    <p>
+        Jellyfin MPV Shim is a client for the Jellyfin media server which plays media in the
+        MPV media player. The application runs in the background and opens MPV only
+        when media is cast to the player. The player supports most file formats, allowing you
+        to prevent needless transcoding of your media files on the server. The player also has
+        advanced features, such as bulk subtitle updates and launching commands on events.
+    </p>
+    <p>
+        Please read the detailed instructions on GitHub for more details, including usage
+        instructions and configuration details.
+    </p>
+  </description>
+
+  <categories>
+    <category>Video</category>
+    <category>AudioVideo</category>
+    <category>TV</category>
+    <category>Player</category>
+  ​</categories>
+
+  <url type="homepage">https://github.com/jellyfin/jellyfin-mpv-shim</url>
+  <url type="help">https://github.com/jellyfin/jellyfin-mpv-shim/blob/master/README.md</url>
+  <url type="bugtracker">https://github.com/jellyfin/jellyfin-mpv-shim/issues</url>
+  <url type="vcs-browser">https://github.com/jellyfin/jellyfin-mpv-shim</url>
+
+  <screenshots>
+    <screenshot type="default">
+      <caption>The web app casting to MPV Shim</caption>
+      <image type="source" width="802" height="602">https://user-images.githubusercontent.com/8078788/78717835-392d2c00-78ef-11ea-9731-7fd4a1d8ebbe.png</image>
+    </screenshot>
+    <screenshot>
+      <caption>The application playing the MKV Test Suite</caption>
+      <image type="source" width="1024" height="576">https://jellyfin.org/assets/images/blender-c74e98002e3842e5c5ffa8770e17905d.png</image>
+    </screenshot>
+    <screenshot>
+      <caption>The built-in menu inside MPV</caption>
+      <image type="source" width="1024" height="576">https://jellyfin.org/assets/images/menu-d7fdb971f324d02abe0c36ad3cef17e8.png</image>
+    </screenshot>
+  </screenshots>
+
+  <launchable type="desktop-id">com.github.iwalton3.jellyfin-mpv-shim.desktop</launchable>
+
+  <provides>
+    <binary>jellyfin-mpv-shim</binary>
+  </provides>
+  <launchable type="desktop-id">com.github.iwalton3.jellyfin-mpv-shim.desktop</launchable>
+
+  <content_rating type="oars-1.1" />
+  <releases>
+    <release version="2.10.0" date="2026-05-03">
+      <description>
+        <p>Changes:</p>
+        <ul>
+          <li>Fix python 3.14 compat issues on macOS (#487)</li>
+          <li>Fix transcode termination failure (#492, #481)</li>
+          <li>Prevent crash when opening menu during stream load (#493)</li>
+          <li>Fix mpv_ext_no_ovr and OSC interaction (#499)</li>
+          <li>Fix intro skip and custom seek bindings (#491)</li>
+          <li>Make Pillow dependency optional (#494)</li>
+          <li>Fix system tray icon to use X11 (#506)</li>
+          <li>Fix H.265 transcode preference not being used in some cases (#531)</li>
+          <li>Fix capability reporting, state sync, and websocket reconnect (#515)</li>
+          <li>Fix application menu handling (#528)</li>
+          <li>Fix installer not able to close application (#529)</li>
+          <li>Add CLI flags to configure/update/delete account (#519)</li>
+          <li>Use Jellyfin logo as window icon and idle background (#513)</li>
+          <li>Add path substitutions feature (#511)</li>
+          <li>Make external mpv process start retries and retry delay configurable in settings (#504)</li>
+          <li>Implement local-network priority for Jellyfin server connections (#502)</li>
+          <li>Added new language_config feature, allows mpv-style alang/slang config, conditional preferences, and more</li>
+          <li>Fix issue where volume 0% is reported as 100% (#497)</li>
+          <li>Add --help, --debug, --gui, and --no-gui options (#477)</li>
+          <li>Make connection retry and health check more robust.</li>
+          <li>Fix issue where ipv6 connections always register as remote. (#482)</li>
+          <li>Fix issue where OSC menu didn't have background, affecting usability.</li>
+          <li>Upgrade mpv version.</li>
+          <li>Replace webview-based display mirror with tkinter-based one.</li>
+        </ul>
+      </description>
+    </release>
+    <release version="2.9.0" date="2025-03-17">
+      <description>
+        <p>Changes:</p>
+        <ul>
+          <li>Ignore empty client list failures. (#422)</li>
+          <li>Update skip intro to use official media segments API.</li>
+          <li>Pass media source into PlaybackInfo.</li>
+          <li>Add optional mtls support. (#426)</li>
+          <li>Catch exceptions when registering Discord join callback. (#440)</li>
+          <li>Catch exceptions from pystray. (#434)</li>
+          <li>Make main halt event work on non-glibc systems. (#432)</li>
+          <li>Use latest package versions. (#429)</li>
+          <li>OpenBSD improvements. (#428)</li>
+        </ul>
+      </description>
+    </release>
+    <release version="2.8.0" date="2024-06-05">
+      <description>
+        <p>Changes:</p>
+        <ul>
+          <li>Add delay between connection and connection validation to reduce connection failures.</li>
+          <li>Update skip intro third-party plugin support.</li>
+        </ul>
+      </description>
+    </release>
+    <release version="2.7.0" date="2024-05-13">
+      <description>
+        <p>Changes:</p>
+        <ul>
+          <li>Switch to native Jellyfin Trickplay support.</li>
+          <li>Update mpv version to latest git version.</li>
+          <li>Fix support for newer MPV versions. (#377)</li>
+          <li>Make log level configurable. (#379)</li>
+          <li>Fix icon title. (#380)</li>
+        </ul>
+      </description>
+    </release>
+    <release version="2.6.0" date="2023-03-07">
+      <description>
+        <p>Disable built-in MPV playback resuming. (#323)</p>
+        <p>Support IPv6 addressing with a protocol prefix (#306)</p>
+        <p>Switch to mpv build 20230304 362256e with TLS 1.3 support.</p>
+        <p>Fix DEL stock MPV shortcut. (#326)</p>
+        <p>Fix endless video skipping with auto profiles. (#323)</p>
+        <p>Update Shader Packs to add NVIDIA Image Scaling and AMD FidelityFX shaders.</p>
+      </description>
+    </release>
+    <release version="2.5.0" date="2023-02-25">
+      <description>
+        <p>Fix thread hang when quitting application. (#317)</p>
+        <p>Fix direct paths in external mpv. (#316)</p>
+        <p>Ignore chapters which do not have images for trickplay.</p>
+        <p>Fix script support and map config folder to MPV (including scripts/fonts). (#320) (#321)</p>
+        <p>Add thumbfast compatibility layer to support alternate OSCs. (#321)</p>
+      </description>
+    </release>
+    <release version="2.4.2" date="2023-02-16">
+      <description>
+        <p>Add preview images on seek bar. (Works with chapter images by default, also supports JellyScrub.)</p>
+        <p>Handle removal of already configured shader profiles gracefully.</p>
+        <p>Force transcode Dolby Vision and optionally HDR video (configurable)</p>
+        <p>Clean up and add fallback title for discord presence. (#310)</p>
+      </description>
+    </release>
+    <release version="2.3.1" date="2023-02-12">
+      <description>
+        <p>Update python-mpv-jsonipc to v1.1.14 to handle socket close failure on Windows.</p>
+        <p>Update jellyfin-apiclient-python to v1.9.2 to avoid issues with HTTP connections failing.</p>
+        <p>Attempt initial server connection up to three times to prevent random "client not connected" errors.</p>
+        <p>Re-check if client is actually connected every 5 minutes. (Configurable.)</p>
+        <p>Update to MPV version v0.35.1 (Flatpak).</p>
+        <p>Add experimental skip intro support. (Must be enabled manually and requires an unofficial plugin.)</p>
+      </description>
+    </release>
+    <release version="2.2.0" date="2022-06-19">
+      <description>
+        <p>Automatically reconnect if Jellyfin fails to register client. (#268)</p>
+        <p>Add ability to switch between "lq" and "hq" versions of shader packs.</p>
+      </description>
+    </release>
+    <release version="2.1.0" date="2022-06-11">
+      <description>
+        <p>Upgrade to MPV version 20220515 9467772.</p>
+        <p>Add flag for force_set_played due to double trakt play issue.</p>
+        <p>Prevent multiple unwanted update checks.</p>
+        <p>Fix to work with python-mpv 1.0 and MPV library v2.</p>
+        <p>Add play_cmd and idle_ended_cmd. (#225)</p>
+        <p>Allow disabling raise_mpv and also only do it once per play. (#218)</p>
+        <p>Make transcode termination failure non-fatal. (#259)</p>
+      </description>
+    </release>
+    <release version="2.0.2" date="2021-12-22">
+      <description>
+        <p>Upgrade to MPV version 20211212 0e76372.</p>
+        <p>Use certifi to provide CA for websocket connections. (#235)</p>
+        <p>Prevent direct play bitrate being limited to 8 mbps.</p>
+      </description>
+    </release>
+    <release version="2.0.1" date="2021-04-21">
+      <description>
+        <p>Fix DPI issue on Windows.</p>
+        <p>Remove dependency on pydantic and handle some possible config errors.</p>
+        <p>Fix setting to allow fully disabling OSC. (#212)</p>
+      </description>
+    </release>
+    <release version="2.0.0" date="2021-04-19">
+      <description>
+        <p>This release drops the desktop webview mode.</p>
+        <p>Please use Jellyfin Media Player instead or cast to the application. You can set MPV Shim as the default target in the web player as of 10.7.0.</p>
+      </description>
+    </release>
+    <release version="1.10.4" date="2021-04-13">
+      <description>
+        <p>Changes:</p>
+        <ul>
+            <li>Upgrade to a newer MPV build.</li>
+            <li>Add more locations to the update checker.</li>
+        </ul>
+      </description>
+    </release>
+    <release version="1.10.3" date="2021-03-27">
+      <description>
+        <p>This release fixes some important bugs. Changes:</p>
+        <ul>
+            <li>#197 Fix shuffle, play next, and play last.</li>
+            <li>#179 Fix "failed to execute script" on Windows.</li>
+        </ul>
+      </description>
+    </release>
+    <release version="1.10.2" date="2021-03-25">
+      <description>
+        <p>This release fixes some important bugs. Changes:</p>
+        <ul>
+            <li>#191 Playing media from episode page crashes player logic and doesn't set subtitle/audio streams.</li>
+            <li>#194 Fix erratic navigation in webclient caused by sending back bad display mirror events.</li>
+            <li>#193 Handle trailing slashes in server URLs.</li>
+        </ul>
+      </description>
+    </release>
+    <release version="1.10.1" date="2021-03-24">
+      <description>
+        <p>This release fixes websocket forwarding and casting in the desktop client. Changes:</p>
+        <ul>
+            <li>Forward websocket events back to desktop web client.</li>
+            <li>Re-enable casting in the desktop web client.</li>
+            <li>Send remote control buttons to web client when MPV isn't open.</li>
+            <li>Upgrade the Flatpak platform version.</li>
+        </ul>
+      </description>
+    </release>
+    <release version="1.10.0" date="2021-03-23">
+      <description>
+        <p>This release changes how the web client works to improve reliability. Changes:</p>
+        <ul>
+            <li>Map navigation buttons to seeking when menu inactive. (#146)</li>
+            <li>Implement session passing and http-based webclient control.</li>
+            <li>Added support for creating a .app file (#184)</li>
+            <li>Fix "Unknown" in SyncPlay menu.</li>
+            <li>Fix possible seek to end with SyncPlay group join.</li>
+        </ul>
+      </description>
+    </release>
+    <release version="1.9.0" date="2021-03-18">
+      <description>
+        <p>This release adds support for SyncPlay on 10.7.0. Changes:</p>
+        <ul>
+            <li>Speed up closing the player.</li>
+            <li>Drop SyncPlay 10.6.x support.</li>
+            <li>Upgrade the web client.</li>
+        </ul>
+      </description>
+    </release>
+    <release version="1.8.1" date="2020-12-12">
+      <description>
+        <p>This is a maintenance update and the last one to support SyncPlay on 1.6.x. Changes:</p>
+        <ul>
+            <li>Add keyboard shortcut (k) for killing shaders.</li>
+            <li>Add track language filter.</li>
+            <li>Validate config data and show errors when parsing fails.</li>
+            <li>Stop SyncPlay hanging between episodes.</li>
+            <li>Fix player flash between episodes after opening menu.</li>
+            <li>Add an exact seek config option.</li>
+            <li>Do not sync playback while showing the menu.</li>
+            <li>Add config option for screenshot directory.</li>
+            <li>Fix disable certificate validation option.</li>
+            <li>Prepare for project move/rename to jellyfin/jellyfin-desktop.</li>
+        </ul>
+      </description>
+    </release>
+    <release version="1.8.0" date="2020-08-18">
+      <description>
+        <p>This update integrates many improvements, many directly from user feedback. Changes:</p>
+        <ul>
+            <li>First localized MPV Shim release! (#68)</li>
+            <li>Add mouse support in the menu.</li>
+            <li>Add Discord Rich Presence support. (#100)</li>
+            <li>Warn on first bandwidth-related transcode each session.</li>
+            <li>Allow completely disabling bandwith transcoding from menu.</li>
+            <li>Add option to disable SSL cert checking. (Not Encouraged!)</li>
+            <li>Add option to use default MPV config with external mpv.</li>
+            <li>Add option to disable MPV media key integration.</li>
+            <li>Add option to wait for network at startup.</li>
+            <li>Remember size of desktop client only by default, not position.</li>
+            <li>Remember window full-screen state between episodes.</li>
+        </ul>
+      </description>
+    </release>
+    <release version="1.7.1" date="2020-08-12">
+      <description>
+        <p>This is a maintenance update. Changes:</p>
+        <ul>
+            <li>Increase the timeout for logins. (#99)</li>
+            <li>Add update check using GitHub. (#50)</li>
+            <li>Prepare application for translation. (#68)</li>
+            <li>Clarify the "Always Transcode" option. (#72)</li>
+            <li>Add option to scale web client. (#90)</li>
+            <li>Migrate from deprecated idle event to observer.</li>
+            <li>Remove unused SyncPlay config options.</li>
+        </ul>
+      </description>
+    </release>
+    <release version="1.7.0" date="2020-08-07">
+      <description>
+        <p>This release adds SyncPlay support and better logging. Changes:</p>
+        <ul>
+            <li>Add support for SyncPlay!</li>
+            <li>Add ability to log to disk.</li>
+            <li>Remove API keys from logs by default.</li>
+            <li>Possibly fix multi-server support.</li>
+            <li>Upgrade web client.</li>
+        </ul>
+      </description>
+    </release>
+    <release version="1.6.0" date="2020-08-02">
+      <description>
+        <p>This release adds shader packs and SPV integration. Changes:</p>
+        <ul>
+            <li>Add support for glsl shader packs.</li>
+            <li>Add support for controlling SVP.</li>
+            <li>Don't crash with unset subtitle language. (#93)</li>
+            <li>Make the settings button in the mobile app open settings.</li>
+            <li>Upgrade web client. (Fixes issues with subtitles and stuck dialogs.)</li>
+        </ul>
+      </description>
+    </release>
+    <release version="1.5.11" date="2020-07-20">
+      <description>
+        <p>This is a maintenance release. Changes:</p>
+        <ul>
+            <li>Upgrade pywebview to fix resize hang. (#40)</li>
+            <li>Upgrade web client to latest version.</li>
+            <li>Prevent skipping videos when seeking too much. (#83)</li>
+            <li>Improve handling of direct path SMB urls. (#84)</li>
+            <li>Fix errors when websocket data is not a dict.</li>
+            <li>Update resolution presets to real resolutions.</li>
+        </ul>
+      </description>
+    </release>
+    <release version="1.5.10" date="2020-05-20">
+      <description>
+        <p>Changes:</p>
+        <ul>
+            <li>Make esc key exit fullscreen when no menu is open.</li>
+            <li>Handle seq being null on Nightly. (#63)</li>
+            <li>Allow changing built-in keyboard shortcuts.</li>
+            <li>Allow changing seek amount of arrow keys.</li>
+        </ul>
+      </description>
+    </release>
+    <release version="1.5.9" date="2020-05-01">
+      <description>
+        <p>
+          This version allows you to optionally use HEVC instead of H264 for transcoded videos.
+          This allows for better quality streaming or more concurrent users over a slow connection,
+          provided the server has the processing power or acceleration hardware to be able to handle it.
+          You must enable this feature to avoid overloading servers that cannot handle it.
+        </p>
+      </description>
+    </release>
+    <release version="1.5.8" date="2020-04-16">
+      <description>
+        <p>Changes:</p>
+        <ul>
+            <li>Fix playlists always playing first file instead of selected one. (#34 #53)</li>
+            <li>Fix systray to open --config directory. (#45)</li>
+            <li>Fix HiDPI support on Windows. (#51)</li>
+            <li>Add system-wide install mode for Windows. (#49)</li>
+        </ul>
+      </description>
+    </release>
+    <release version="1.5.7" date="2020-04-09">
+      <description>
+        <p>This is the first build of Jellyfin MPV Shim to be release to flathub.</p>
+        <p>Changes:</p>
+        <ul>
+            <li>Add integration data to pip distribution.</li>
+            <li>Read environment if defined for configuration.</li>
+            <li>Use most recent jsonipc library.</li>
+        </ul>
+      </description>
+    </release>
+    <release version="1.5.6" date="2020-04-07">
+      <description>
+        <p>Changes:</p>
+        <ul>
+            <li>Fix user switching in the desktop client.</li>
+            <li>Add --shim option to desktop launcher to launch shim version.</li>
+            <li>Add shortcut option to desktop version to launch shim version.</li>
+            <li>Make compatible with Python 3.6.</li>
+            <li>Add support for input.conf.</li>
+        </ul>
+      </description>
+    </release>
+  </releases>
+  <keywords>
+    <keyword>mpv cast client</keyword>
+    <keyword>jellyfin media server</keyword>
+    <keyword>media server client</keyword>
+    <keyword>media player cast</keyword>
+  </keywords>
+</component>

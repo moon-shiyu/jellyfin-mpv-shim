@@ -1,0 +1,147 @@
+name: build
+
+on:
+  push:
+    branches:
+      - master
+      - main
+      - working
+jobs:
+  build-win64:
+    runs-on: windows-latest
+    steps:
+    - name: Checkout Repository
+      uses: actions/checkout@v6
+    - name: Setup Python 3.13
+      uses: actions/setup-python@v6
+      with:
+        python-version: 3.14
+    - name: Setup git SDK
+      uses: Shadowghost/setup-git-for-windows-sdk@node-24
+      with:
+        flavor: minimal
+    - name: Download mpv
+      id: mpv
+      uses: robinraju/release-downloader@v1
+      with:
+        repository: 'shinchiro/mpv-winbuild-cmake'
+        latest: true
+        fileName: 'mpv-dev-x86_64-v3*.7z'
+    - name: Install dependencies
+      run: |
+        7z x "${{ fromJson(steps.mpv.outputs.downloaded_files)[0] }}"
+        mv libmpv-2.dll mpv-2.dll
+        pip install wheel
+        pip install .[all] pywin32
+        winget install --id JRSoftware.InnoSetup -e -s winget || true || true
+        ./gen_pkg.sh --skip-build
+      shell: bash
+    - name: PyInstaller Bootloader
+      run: |
+        ./gen_pkg.sh --get-pyinstaller; cd pyinstaller/bootloader; python ./waf distclean all; cd ..; pip install .
+      shell: bash
+    - name: Main Build
+      run: |
+        .\build-win.bat
+      shell: cmd
+    - name: Artifact Rename
+      run: |
+        ./artifacts.sh standard
+      shell: bash
+    - name: Archive production artifacts
+      uses: actions/upload-artifact@v7
+      with:
+        name: windows
+        path: ${{ github.workspace }}/publish/Installer/*.exe
+  build-win64-legacy:
+    runs-on: windows-latest
+    steps:
+    - name: Checkout Repository
+      uses: actions/checkout@v6
+    - name: Setup Python 3.13
+      uses: actions/setup-python@v6
+      with:
+        python-version: 3.14
+    - name: Setup git SDK
+      uses: Shadowghost/setup-git-for-windows-sdk@node-24
+      with:
+        flavor: minimal
+    - name: Download mpv
+      id: mpv
+      uses: robinraju/release-downloader@v1
+      with:
+        repository: 'shinchiro/mpv-winbuild-cmake'
+        latest: true
+        fileName: 'mpv-dev-x86_64-[0-9]*-git-*.7z'
+    - name: Install dependencies
+      run: |
+        7z x "${{ fromJson(steps.mpv.outputs.downloaded_files)[0] }}"
+        mv libmpv-2.dll mpv-2.dll
+        pip install wheel
+        pip install .[all] pywin32
+        winget install --id JRSoftware.InnoSetup -e -s winget || true
+        ./gen_pkg.sh --skip-build
+      shell: bash
+    - name: PyInstaller Bootloader
+      run: |
+        ./gen_pkg.sh --get-pyinstaller; cd pyinstaller/bootloader; python ./waf distclean all; cd ..; pip install .
+      shell: bash
+    - name: Main Build
+      run: |
+        .\build-win.bat
+      shell: cmd
+    - name: Artifact Rename
+      run: |
+        ./artifacts.sh legacy64
+      shell: bash
+    - name: Archive production artifacts
+      uses: actions/upload-artifact@v7
+      with:
+        name: windows-legacy64
+        path: ${{ github.workspace }}/publish/Installer/*.exe
+  build-win32-legacy:
+    runs-on: windows-latest
+    steps:
+    - name: Checkout Repository
+      uses: actions/checkout@v6
+    - name: Setup Python 3.13
+      uses: actions/setup-python@v6
+      with:
+        python-version: 3.14
+    - name: Setup git SDK
+      uses: Shadowghost/setup-git-for-windows-sdk@node-24
+      with:
+        flavor: minimal
+    - name: Download mpv
+      id: mpv
+      uses: robinraju/release-downloader@v1
+      with:
+        repository: 'shinchiro/mpv-winbuild-cmake'
+        latest: true
+        fileName: 'mpv-dev-i686*.7z'
+    - name: Install dependencies
+      run: |
+        7z x "${{ fromJson(steps.mpv.outputs.downloaded_files)[0] }}"
+        mv libmpv-2.dll mpv-2.dll
+        pip install wheel
+        pip install .[all] pywin32
+        winget install --id JRSoftware.InnoSetup -e -s winget || true
+        ./gen_pkg.sh --skip-build
+      shell: bash
+    - name: PyInstaller Bootloader
+      run: |
+        ./gen_pkg.sh --get-pyinstaller; cd pyinstaller/bootloader; python ./waf distclean all; cd ..; pip install .
+      shell: bash
+    - name: Legacy Build
+      run: |
+        .\build-win-32.bat
+      shell: cmd
+    - name: Artifact Rename
+      run: |
+        ./artifacts.sh legacy
+      shell: bash
+    - name: Archive production artifacts
+      uses: actions/upload-artifact@v7
+      with:
+        name: windows-legacy32
+        path: ${{ github.workspace }}/publish/InstallerLegacy/*.exe
