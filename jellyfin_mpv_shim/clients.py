@@ -13,6 +13,7 @@ import time
 import logging
 import re
 import threading
+from dataclasses import dataclass, field, replace
 
 import socket
 import ipaddress
@@ -89,6 +90,25 @@ def expo(max_value: Optional[int] = None):
             yield max_value
 
 
+STATE_DISCONNECTED = "disconnected"
+STATE_CONNECTING = "connecting"
+STATE_CONNECTED = "connected"
+STATE_RECONNECTING = "reconnecting"
+STATE_AUTH_FAILED = "auth_failed"
+
+
+@dataclass
+class ServerStatus:
+    server_uuid: str
+    server_name: str
+    server_address: str
+    state: str
+    failure_reason: Optional[str] = None
+    retry_count: int = 0
+    next_retry_seconds: Optional[float] = None
+    last_updated: float = field(default_factory=time.monotonic)
+
+
 class PeriodicHealthCheck(threading.Thread):
     def __init__(self, callback):
         self.halt = False
@@ -116,10 +136,46 @@ class ClientManager(object):
         self.usernames = {}
         self.is_stopping = False
 
+        self._server_statuses = {}
+        self._status_lock = threading.Lock()
+
         self.health_check = None
         if settings.health_check_interval is not None:
             self.health_check = PeriodicHealthCheck(self.check_all_clients)
             self.health_check.start()
+
+    def _update_status(self, server_uuid, **kwargs):
+        with self._status_lock:
+            if server_uuid in self._server_statuses:
+                status = self._server_statuses[server_uuid]
+                for k, v in kwargs.items():
+                    setattr(status, k, v)
+                status.last_updated = time.monotonic()
+            else:
+                self._server_statuses[server_uuid] = ServerStatus(
+                    server_uuid=server_uuid,
+                    last_updated=time.monotonic(),
+                    **kwargs,
+                )
+
+    def _remove_status(self, server_uuid):
+        with self._status_lock:
+            self._server_statuses.pop(server_uuid, None)
+
+    def _uuid_for_client(self, client):
+        for uid, c in self.clients.items():
+            if c is client:
+                return uid
+        return None
+
+    def get_server_statuses(self):
+        with self._status_lock:
+            return [replace(s) for s in self._server_statuses.values()]
+
+    def get_server_status(self, server_uuid):
+        with self._status_lock:
+            s = self._server_statuses.get(server_uuid)
+            return replace(s) if s is not None else None
 
     @staticmethod
     def _get_cli_credential_args():
@@ -291,6 +347,17 @@ class ClientManager(object):
                 )
             )
             for attempt in range(settings.connect_retry_mins * 2):
+                for server in self.credentials:
+                    if server["uuid"] not in self.clients:
+                        self._update_status(
+                            server["uuid"],
+                            state=STATE_RECONNECTING,
+                            server_name=server.get("Name", ""),
+                            server_address=server.get("address", ""),
+                            failure_reason="Initial connection failed, retrying",
+                            retry_count=attempt + 1,
+                            next_retry_seconds=30,
+                        )
                 time.sleep(30)
                 is_logged_in = self._connect_all()
                 if is_logged_in:
@@ -355,6 +422,13 @@ class ClientManager(object):
             )
         except Exception:
             log.warning("Health check session query failed; treating as disconnected.", exc_info=True)
+            client_uuid = self._uuid_for_client(client)
+            if client_uuid:
+                self._update_status(
+                    client_uuid,
+                    state=STATE_DISCONNECTED,
+                    failure_reason="Health check query failed",
+                )
             client_list = []
 
         if client_list is None:
@@ -371,6 +445,13 @@ class ClientManager(object):
                 log.warning(
                     "Client is not actually connected. (It does not show in the client list.)"
                 )
+                client_uuid = self._uuid_for_client(client)
+                if client_uuid:
+                    self._update_status(
+                        client_uuid,
+                        state=STATE_DISCONNECTED,
+                        failure_reason="Client not in server session list",
+                    )
                 # WebSocketDisconnect doesn't always happen here.
                 client.callback = lambda *_: None
                 client.callback_ws = lambda *_: None
@@ -385,12 +466,26 @@ class ClientManager(object):
             if event_name == "WebSocketDisconnect":
                 timeout_gen = expo(100)
                 if server["uuid"] in self.clients:
+                    self._update_status(
+                        server["uuid"],
+                        state=STATE_RECONNECTING,
+                        failure_reason="WebSocket disconnected",
+                        retry_count=0,
+                    )
+                    ws_retry_count = 0
                     while not self.is_stopping:
                         timeout = next(timeout_gen)
+                        ws_retry_count += 1
                         log.info(
                             "No connection to server. Next try in {0} second(s)".format(
                                 timeout
                             )
+                        )
+                        self._update_status(
+                            server["uuid"],
+                            state=STATE_RECONNECTING,
+                            retry_count=ws_retry_count,
+                            next_retry_seconds=timeout,
                         )
                         self._disconnect_client(server=server)
                         time.sleep(timeout)
@@ -398,6 +493,13 @@ class ClientManager(object):
                             break
             elif event_name == "WebSocketConnect":
                 log.info("WebSocket connected, posting capabilities")
+                self._update_status(
+                    server["uuid"],
+                    state=STATE_CONNECTED,
+                    failure_reason=None,
+                    retry_count=0,
+                    next_retry_seconds=None,
+                )
                 try:
                     client.jellyfin.post_capabilities(CAPABILITIES)
                 except Exception:
@@ -431,10 +533,21 @@ class ClientManager(object):
         ]
         self.save_credentials()
         self._disconnect_client(uuid=uuid)
+        self._remove_status(uuid)
 
     def connect_client(self, server, do_retries=True):
         if self.is_stopping:
             return False
+
+        server_uuid = server["uuid"]
+        self._update_status(
+            server_uuid,
+            state=STATE_CONNECTING,
+            server_name=server.get("Name", ""),
+            server_address=server.get("address", ""),
+            failure_reason=None,
+            next_retry_seconds=None,
+        )
 
         is_logged_in = False
         client = self.client_factory()
@@ -446,6 +559,13 @@ class ClientManager(object):
                 self.clients[server["uuid"]] = client
                 if server.get("username"):
                     self.usernames[server["uuid"]] = server["username"]
+                self._update_status(
+                    server_uuid,
+                    state=STATE_CONNECTED,
+                    failure_reason=None,
+                    retry_count=0,
+                    next_retry_seconds=None,
+                )
             elif do_retries:
                 # Jellyfin client sometimes "connects" halfway but doesn't actually work.
                 # Retry three times to reduce odds of this happening.
@@ -454,11 +574,30 @@ class ClientManager(object):
                     log.warning(
                         f"Partially connected. Retrying {i+1}/{partial_reconnect_attempts}."
                     )
+                    self._update_status(
+                        server_uuid,
+                        state=STATE_CONNECTING,
+                        failure_reason="Partial connection, retrying",
+                        retry_count=i + 1,
+                    )
                     self._disconnect_client(server=server)
                     time.sleep(1)
                     if self.connect_client(server, False):
                         is_logged_in = True
                         break
+        else:
+            self._update_status(
+                server_uuid,
+                state=STATE_AUTH_FAILED,
+                failure_reason="Authentication failed",
+            )
+
+        if not is_logged_in and server["connected"]:
+            self._update_status(
+                server_uuid,
+                state=STATE_DISCONNECTED,
+                failure_reason="Connection setup failed",
+            )
 
         return is_logged_in
 
@@ -472,6 +611,8 @@ class ClientManager(object):
         if server is not None:
             server["connected"] = False
 
+        self._update_status(uuid, state=STATE_DISCONNECTED, next_retry_seconds=None)
+
         client = self.clients[uuid]
         del self.clients[uuid]
         client.stop()
@@ -480,6 +621,8 @@ class ClientManager(object):
         self.stop_all_clients()
         self.credentials = []
         self.save_credentials()
+        with self._status_lock:
+            self._server_statuses.clear()
 
     def stop_all_clients(self):
         for key, client in list(self.clients.items()):
@@ -501,6 +644,13 @@ class ClientManager(object):
                 log.info(
                     "Health check: retrying disconnected server %s",
                     server.get("address"),
+                )
+                self._update_status(
+                    server["uuid"],
+                    state=STATE_CONNECTING,
+                    server_name=server.get("Name", ""),
+                    server_address=server.get("address", ""),
+                    failure_reason="Health check retry",
                 )
                 self.connect_client(server, do_retries=False)
 

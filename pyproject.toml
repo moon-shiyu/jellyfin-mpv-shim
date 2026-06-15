@@ -58,3 +58,6 @@ jellyfin_mpv_shim = [
     "default_shader_pack/**/*",
     "integration/**/*",
 ]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
